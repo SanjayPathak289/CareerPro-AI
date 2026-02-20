@@ -5,14 +5,14 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Sparkles, 
-  History, 
-  Settings, 
-  ChevronRight, 
-  Copy, 
-  Check, 
-  Trash2, 
+import {
+  Sparkles,
+  History,
+  Settings,
+  ChevronRight,
+  Copy,
+  Check,
+  Trash2,
   Info,
   Globe,
   Briefcase,
@@ -40,7 +40,7 @@ function cn(...inputs: ClassValue[]) {
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  
+
   // Architect State
   const [role, setRole] = useState('');
   const [industry, setIndustry] = useState('');
@@ -56,6 +56,10 @@ export default function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [otp, setOtp] = useState('');
+  const [isOtpSent, setIsOtpSent] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Load history from localStorage
   useEffect(() => {
@@ -89,7 +93,7 @@ export default function App() {
       if (data) {
         setResult(data.optimizedBullet);
         setBenchmarking(data.benchmarking);
-        
+
         const newBullet: ResumeBullet = {
           id: crypto.randomUUID(),
           role,
@@ -98,7 +102,7 @@ export default function App() {
           optimized: data.optimizedBullet,
           timestamp: Date.now()
         };
-        
+
         setHistory(prev => [newBullet, ...prev].slice(0, 20));
       }
     } catch (error) {
@@ -118,16 +122,63 @@ export default function App() {
     setHistory(prev => prev.filter(item => item.id !== id));
   };
 
-  const handleAuthSubmit = (e: React.FormEvent) => {
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Simulate login/register
-    setIsLoggedIn(true);
+    setAuthError(null);
+    setIsVerifying(true);
+
+    try {
+      const response = await fetch('http://localhost:3001/api/auth/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, name }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.message || 'Failed to send OTP');
+      }
+
+      setIsOtpSent(true);
+    } catch (error: any) {
+      setAuthError(error.message);
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleVerifyOTP = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setIsVerifying(true);
+
+    try {
+      const response = await fetch('http://localhost:3001/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, otp, name }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Invalid OTP');
+      }
+
+      // Save token (in a real app, use secure storage)
+      localStorage.setItem('auth_token', data.token);
+      setIsLoggedIn(true);
+    } catch (error: any) {
+      setAuthError(error.message);
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   if (!isLoggedIn) {
     return (
       <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center p-6">
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="w-full max-w-md"
@@ -142,7 +193,7 @@ export default function App() {
 
           <div className="glass-card rounded-3xl p-8 shadow-xl shadow-slate-200/50">
             <div className="flex gap-4 mb-8">
-              <button 
+              <button
                 onClick={() => setAuthMode('login')}
                 className={cn(
                   "flex-1 py-2 text-sm font-bold transition-all border-b-2",
@@ -151,7 +202,7 @@ export default function App() {
               >
                 Login
               </button>
-              <button 
+              <button
                 onClick={() => setAuthMode('register')}
                 className={cn(
                   "flex-1 py-2 text-sm font-bold transition-all border-b-2",
@@ -162,56 +213,100 @@ export default function App() {
               </button>
             </div>
 
-            <form onSubmit={handleAuthSubmit} className="space-y-5">
-              {authMode === 'register' && (
+            {isOtpSent ? (
+              <form onSubmit={handleVerifyOTP} className="space-y-5">
                 <div>
-                  <label className="label-text">Full Name</label>
-                  <input 
-                    type="text" 
+                  <label className="label-text">Enter 6-Digit Code</label>
+                  <input
+                    type="text"
                     required
-                    className="input-field" 
-                    placeholder="John Doe"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    maxLength={6}
+                    className="input-field text-center text-2xl tracking-[10px] font-bold"
+                    placeholder="000000"
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value)}
+                  />
+                  <p className="text-[10px] text-slate-400 mt-2 text-center">
+                    We sent a verification code to <b>{email}</b>
+                  </p>
+                </div>
+
+                {authError && (
+                  <div className="p-3 rounded-lg bg-red-50 border border-red-100 flex items-center gap-2 text-red-600 text-xs">
+                    <AlertCircle className="w-4 h-4" />
+                    {authError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isVerifying || otp.length < 6}
+                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-100 flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                  Verify & Continue
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsOtpSent(false)}
+                  className="w-full text-xs text-slate-400 hover:text-indigo-600 font-medium transition-colors"
+                >
+                  Use a different email
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleAuthSubmit} className="space-y-5">
+                {authMode === 'register' && (
+                  <div>
+                    <label className="label-text">Full Name</label>
+                    <input
+                      type="text"
+                      required
+                      className="input-field"
+                      placeholder="John Doe"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="label-text">Email Address</label>
+                  <input
+                    type="email"
+                    required
+                    className="input-field"
+                    placeholder="john@example.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                   />
                 </div>
-              )}
-              <div>
-                <label className="label-text">Email Address</label>
-                <input 
-                  type="email" 
-                  required
-                  className="input-field" 
-                  placeholder="john@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="label-text">Password</label>
-                <input 
-                  type="password" 
-                  required
-                  className="input-field" 
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </div>
-              
-              <button 
-                type="submit"
-                className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-100 mt-4"
-              >
-                {authMode === 'login' ? 'Sign In' : 'Create Account'}
-              </button>
-            </form>
 
-            <div className="mt-6 text-center">
-              <button className="text-xs text-slate-400 hover:text-indigo-600 font-medium transition-colors">
-                Forgot your password?
-              </button>
-            </div>
+                {authError && (
+                  <div className="p-3 rounded-lg bg-red-50 border border-red-100 flex items-center gap-2 text-red-600 text-xs">
+                    <AlertCircle className="w-4 h-4" />
+                    {authError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isVerifying}
+                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-100 mt-4 flex items-center justify-center gap-2"
+                >
+                  {isVerifying && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {authMode === 'login' ? 'Sign In with OTP' : 'Create Account'}
+                </button>
+              </form>
+            )}
+
+            {!isOtpSent && (
+              <div className="mt-6 text-center">
+                <button className="text-xs text-slate-400 hover:text-indigo-600 font-medium transition-colors">
+                  Need help? Contact support
+                </button>
+              </div>
+            )}
           </div>
 
           <p className="text-center text-[10px] text-slate-400 mt-8 uppercase tracking-widest font-bold">
@@ -234,7 +329,7 @@ export default function App() {
         </div>
 
         <nav className="px-4 py-2 space-y-1">
-          <div 
+          <div
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all bg-indigo-50 text-indigo-700"
           >
             <Sparkles className="w-4 h-4" />
@@ -247,7 +342,7 @@ export default function App() {
             <span className="label-text">Architect History</span>
             <History className="w-3.5 h-3.5 text-slate-400" />
           </div>
-          
+
           <AnimatePresence mode="popLayout">
             {history.length === 0 ? (
               <div className="text-center py-12 px-4">
@@ -271,7 +366,7 @@ export default function App() {
                     setResult(item.optimized);
                   }}
                 >
-                  <button 
+                  <button
                     onClick={(e) => {
                       e.stopPropagation();
                       deleteHistoryItem(item.id);
@@ -296,7 +391,7 @@ export default function App() {
         </div>
 
         <div className="p-4 border-t border-slate-100">
-          <button 
+          <button
             onClick={() => setIsLoggedIn(false)}
             className="w-full flex items-center gap-3 p-3 rounded-xl bg-slate-50 text-slate-500 hover:text-red-600 transition-colors cursor-pointer"
           >
@@ -336,9 +431,9 @@ export default function App() {
                     <label className="label-text">Target Role</label>
                     <div className="relative">
                       <Briefcase className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                      <input 
-                        type="text" 
-                        placeholder="e.g. Senior Product Manager" 
+                      <input
+                        type="text"
+                        placeholder="e.g. Senior Product Manager"
                         className="input-field pl-10"
                         value={role}
                         onChange={(e) => setRole(e.target.value)}
@@ -349,9 +444,9 @@ export default function App() {
                     <label className="label-text">Industry (Optional)</label>
                     <div className="relative">
                       <Globe className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                      <input 
-                        type="text" 
-                        placeholder="e.g. Fintech, SaaS" 
+                      <input
+                        type="text"
+                        placeholder="e.g. Fintech, SaaS"
                         className="input-field pl-10"
                         value={industry}
                         onChange={(e) => setIndustry(e.target.value)}
@@ -363,9 +458,9 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <label className="label-text">Character Limit (Excluding Spaces)</label>
-                    <input 
-                      type="number" 
-                      min="20" 
+                    <input
+                      type="number"
+                      min="20"
                       max="500"
                       className="input-field"
                       value={limit}
@@ -376,15 +471,15 @@ export default function App() {
 
                 <div>
                   <label className="label-text">Raw Experience Point</label>
-                  <textarea 
-                    placeholder="e.g. I led a team to build a new app that increased revenue by 20%." 
+                  <textarea
+                    placeholder="e.g. I led a team to build a new app that increased revenue by 20%."
                     className="input-field min-h-[120px] resize-none py-4 leading-relaxed"
                     value={rawPoint}
                     onChange={(e) => setRawPoint(e.target.value)}
                   />
                 </div>
 
-                <button 
+                <button
                   onClick={handleOptimize}
                   disabled={isOptimizing || !role || !rawPoint}
                   className="w-full py-4 bg-slate-900 hover:bg-black text-white rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-3 shadow-lg shadow-slate-200 disabled:opacity-50 disabled:cursor-not-allowed group"

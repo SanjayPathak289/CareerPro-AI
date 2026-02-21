@@ -103,6 +103,11 @@ export default function App() {
       if (session?.user) {
         saveUserToDB(session.user);
         loadHistory(session.user.id);
+
+        // Clean up the URL if Supabase left an empty hash after auth
+        if (window.location.hash === '#') {
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
       } else {
         setHistory([]); // clear history on logic out
       }

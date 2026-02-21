@@ -26,7 +26,8 @@ import {
   Send,
   ShieldCheck,
   AlertCircle,
-  FileText
+  FileText,
+  LogOut
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -380,9 +381,9 @@ export default function App() {
         <div className="p-4 border-t border-slate-100">
           <button
             onClick={handleSignOut}
-            className="w-full flex items-center gap-3 p-3 rounded-xl bg-slate-50 text-slate-500 hover:text-red-600 transition-colors cursor-pointer"
+            className="w-full flex items-center gap-3 p-3 rounded-xl bg-slate-50 text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
           >
-            <UserCircle className="w-4 h-4" />
+            <LogOut className="w-4 h-4" />
             <span className="text-sm font-medium">Sign Out</span>
           </button>
         </div>
@@ -410,10 +411,11 @@ export default function App() {
             {/* Mobile Sign Out Button */}
             <button
               onClick={handleSignOut}
-              className="lg:hidden flex items-center justify-center w-8 h-8 rounded-lg bg-slate-50 text-slate-500 hover:text-red-600 transition-colors border border-slate-200 shrink-0"
+              className="lg:hidden flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-50 text-slate-600 hover:text-red-600 hover:bg-red-50 transition-colors border border-slate-200 shrink-0"
               title="Sign Out"
             >
-              <UserCircle className="w-4 h-4" />
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="text-xs font-bold">Sign Out</span>
             </button>
           </div>
         </header>

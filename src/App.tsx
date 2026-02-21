@@ -391,24 +391,35 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
         {/* Header */}
-        <header className="h-16 border-b border-slate-200 bg-white/80 backdrop-blur-md flex items-center justify-between px-8 z-10">
+        <header className="h-16 border-b border-slate-200 bg-white/80 backdrop-blur-md flex items-center justify-between px-4 lg:px-8 z-10 shrink-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-slate-400">CareerPro AI</span>
-            <ChevronRight className="w-4 h-4 text-slate-300" />
+            <div className="lg:hidden w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shrink-0">
+              <Cpu className="w-4 h-4 text-white" />
+            </div>
+            <span className="hidden sm:inline-block text-sm font-medium text-slate-400">CareerPro AI</span>
+            <ChevronRight className="hidden sm:inline-block w-4 h-4 text-slate-300" />
             <span className="text-sm font-semibold text-slate-800">
               Resume Architect
             </span>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+          <div className="flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
               <ShieldCheck className="w-3.5 h-3.5" />
               <span className="text-xs font-bold uppercase tracking-wider">Secure Engine</span>
             </div>
+            {/* Mobile Sign Out Button */}
+            <button
+              onClick={handleSignOut}
+              className="lg:hidden flex items-center justify-center w-8 h-8 rounded-lg bg-slate-50 text-slate-500 hover:text-red-600 transition-colors border border-slate-200 shrink-0"
+              title="Sign Out"
+            >
+              <UserCircle className="w-4 h-4" />
+            </button>
           </div>
         </header>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-8 lg:p-12">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-8 lg:p-12">
           <div className="max-w-4xl mx-auto">
             <div className="space-y-8">
               {/* Existing Architect UI */}

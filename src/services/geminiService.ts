@@ -41,7 +41,7 @@ raw_point: ${rawPoint}
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-2.5-flash",
     contents: [{ parts: [{ text: prompt }] }],
     config: {
       systemInstruction,

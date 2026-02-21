@@ -32,14 +32,16 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { ResumeBullet, BenchmarkingData } from './types';
 import { optimizeAndBenchmark } from './services/geminiService';
+import { supabase } from './lib/supabase';
+import { User } from '@supabase/supabase-js';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [user, setUser] = useState<User | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
 
   // Architect State
   const [role, setRole] = useState('');
@@ -51,32 +53,63 @@ export default function App() {
   const [benchmarking, setBenchmarking] = useState<BenchmarkingData | null>(null);
   const [history, setHistory] = useState<ResumeBullet[]>([]);
   const [copied, setCopied] = useState(false);
-
-  // Auth Form State
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [otp, setOtp] = useState('');
-  const [isOtpSent, setIsOtpSent] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Load history from localStorage
-  useEffect(() => {
-    const saved = localStorage.getItem('resume_history');
-    if (saved) {
-      try {
-        setHistory(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to load history', e);
-      }
-    }
-  }, []);
+  // Fetch History from Supabase
+  const loadHistory = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('resume_history')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
 
-  // Save history to localStorage
+      if (error) throw error;
+      setHistory(data || []);
+    } catch (err) {
+      console.error('Failed to load history from Supabase:', err);
+    }
+  };
+
+  const saveUserToDB = async (userParam: User) => {
+    // Optional: save to users table to ensure there is a record
+    const { email, user_metadata } = userParam;
+    try {
+      await supabase.from('users').upsert({
+        id: userParam.id,
+        email: email,
+        name: user_metadata?.full_name || '',
+        avatar_url: user_metadata?.avatar_url || '',
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+    } catch (e) {
+      console.warn("Failed to sync user to public table (might not exist yet):", e);
+    }
+  }
+
+  // Check initial session & listen for changes
   useEffect(() => {
-    localStorage.setItem('resume_history', JSON.stringify(history));
-  }, [history]);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        saveUserToDB(session.user);
+        loadHistory(session.user.id);
+      }
+      setIsInitializing(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        saveUserToDB(session.user);
+        loadHistory(session.user.id);
+      } else {
+        setHistory([]); // clear history on logic out
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   const handleOptimize = async () => {
     if (!role || !rawPoint) return;
@@ -90,20 +123,31 @@ export default function App() {
         rawPoint
       });
 
-      if (data) {
+      if (data && user) {
         setResult(data.optimizedBullet);
         setBenchmarking(data.benchmarking);
 
-        const newBullet: ResumeBullet = {
-          id: crypto.randomUUID(),
+        // Save to Supabase DB
+        const newHistoryInsert = {
+          user_id: user.id,
           role,
           industry,
-          raw: rawPoint,
-          optimized: data.optimizedBullet,
-          timestamp: Date.now()
+          character_limit: limit,
+          raw_point: rawPoint,
+          optimized_result: data.optimizedBullet
         };
 
-        setHistory(prev => [newBullet, ...prev].slice(0, 20));
+        const { data: insertedData, error } = await supabase
+          .from('resume_history')
+          .insert([newHistoryInsert])
+          .select()
+          .single();
+
+        if (error) {
+          console.error('Failed to save history to Supabase', error);
+        } else if (insertedData) {
+          setHistory(prev => [insertedData, ...prev]);
+        }
       }
     } catch (error) {
       console.error('Optimization failed', error);
@@ -118,201 +162,143 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const deleteHistoryItem = (id: string) => {
-    setHistory(prev => prev.filter(item => item.id !== id));
-  };
-
-  const handleAuthSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError(null);
-    setIsVerifying(true);
-
+  const deleteHistoryItem = async (id: string) => {
     try {
-      const response = await fetch('http://localhost:3001/api/auth/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, name }),
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.message || 'Failed to send OTP');
-      }
-
-      setIsOtpSent(true);
-    } catch (error: any) {
-      setAuthError(error.message);
-    } finally {
-      setIsVerifying(false);
+      const { error } = await supabase.from('resume_history').delete().eq('id', id);
+      if (error) throw error;
+      setHistory(prev => prev.filter(item => item.id !== id));
+    } catch (err) {
+      console.error("Failed to delete history item", err);
     }
   };
 
-  const handleVerifyOTP = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleGoogleSignIn = async () => {
     setAuthError(null);
-    setIsVerifying(true);
-
     try {
-      const response = await fetch('http://localhost:3001/api/auth/verify-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, otp, name }),
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin,
+        },
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Invalid OTP');
-      }
-
-      // Save token (in a real app, use secure storage)
-      localStorage.setItem('auth_token', data.token);
-      setIsLoggedIn(true);
-    } catch (error: any) {
-      setAuthError(error.message);
-    } finally {
-      setIsVerifying(false);
+      if (error) throw error;
+    } catch (err: any) {
+      setAuthError(err.message || 'Error occurred during Google Sign In');
     }
   };
 
-  if (!isLoggedIn) {
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
+
+  if (isInitializing) {
     return (
-      <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center p-6">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-md"
-        >
-          <div className="text-center mb-8">
-            <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-xl shadow-indigo-100">
-              <Cpu className="w-10 h-10 text-white" />
-            </div>
-            <h1 className="font-serif italic text-3xl font-bold text-slate-900">CareerPro AI</h1>
-            <p className="text-slate-500 mt-2">Your multi-module career automation engine.</p>
-          </div>
+      <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+      </div>
+    );
+  }
 
-          <div className="glass-card rounded-3xl p-8 shadow-xl shadow-slate-200/50">
-            <div className="flex gap-4 mb-8">
-              <button
-                onClick={() => setAuthMode('login')}
-                className={cn(
-                  "flex-1 py-2 text-sm font-bold transition-all border-b-2",
-                  authMode === 'login' ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-400"
-                )}
-              >
-                Login
-              </button>
-              <button
-                onClick={() => setAuthMode('register')}
-                className={cn(
-                  "flex-1 py-2 text-sm font-bold transition-all border-b-2",
-                  authMode === 'register' ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-400"
-                )}
-              >
-                Register
-              </button>
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-[#F8F9FA] flex flex-col justify-center relative overflow-hidden">
+        {/* Background Decorative Elements */}
+        <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none -translate-y-20">
+          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-indigo-500/10 blur-[120px]" />
+          <div className="absolute top-[20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-blue-500/5 blur-[100px]" />
+          <div className="absolute bottom-[-10%] left-[20%] w-[60%] h-[60%] rounded-full bg-purple-500/5 blur-[120px]" />
+        </div>
+
+        <div className="max-w-6xl w-full mx-auto px-6 grid grid-cols-1 lg:grid-cols-2 gap-16 items-center flex-1 relative z-10 py-12">
+
+          {/* Left Column: Value Prop */}
+          <motion.div
+            initial={{ opacity: 0, x: -40 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.8, ease: "easeOut" }}
+            className="space-y-8"
+          >
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-50 text-indigo-700 font-bold text-sm tracking-wide border border-indigo-100/50 shadow-sm">
+              <Sparkles className="w-4 h-4" />
+              Career Automation Engine
             </div>
 
-            {isOtpSent ? (
-              <form onSubmit={handleVerifyOTP} className="space-y-5">
-                <div>
-                  <label className="label-text">Enter 6-Digit Code</label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={6}
-                    className="input-field text-center text-2xl tracking-[10px] font-bold"
-                    placeholder="000000"
-                    value={otp}
-                    onChange={(e) => setOtp(e.target.value)}
-                  />
-                  <p className="text-[10px] text-slate-400 mt-2 text-center">
-                    We sent a verification code to <b>{email}</b>
-                  </p>
+            <h1 className="text-5xl md:text-7xl font-bold text-slate-900 tracking-tight leading-[1.1]">
+              Land the job <br />
+              <span className="text-transparent bg-clip-text bg-linear-to-r from-indigo-600 to-blue-500 italic font-serif">
+                faster.
+              </span>
+            </h1>
+
+            <p className="text-lg md:text-xl text-slate-500 leading-relaxed max-w-xl">
+              Stop agonizing over your resume. Turn raw experience into elite, ATS-optimized bullet points instantly.
+            </p>
+
+            <div className="pt-4 grid grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <div className="w-12 h-12 rounded-2xl bg-white shadow-lg shadow-slate-200/50 flex items-center justify-center border border-slate-100">
+                  <Cpu className="w-6 h-6 text-indigo-600" />
                 </div>
+                <h3 className="font-bold text-slate-800">AI Architect</h3>
+                <p className="text-sm text-slate-500">Industry-trained generation</p>
+              </div>
+              <div className="space-y-2">
+                <div className="w-12 h-12 rounded-2xl bg-white shadow-lg shadow-slate-200/50 flex items-center justify-center border border-slate-100">
+                  <ShieldCheck className="w-6 h-6 text-indigo-600" />
+                </div>
+                <h3 className="font-bold text-slate-800">Data Secure</h3>
+                <p className="text-sm text-slate-500">Private & local history</p>
+              </div>
+            </div>
+          </motion.div>
 
+          {/* Right Column: Login Card */}
+          <motion.div
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, ease: "easeOut", delay: 0.2 }}
+            className="w-full max-w-md mx-auto"
+          >
+            <div className="glass-card rounded-[2.5rem] p-10 shadow-2xl shadow-indigo-900/5 border border-white/60 relative overflow-hidden bg-white/60 backdrop-blur-2xl">
+              <div className="absolute top-0 inset-x-0 h-1 bg-linear-to-r from-indigo-500 via-blue-500 to-purple-500" />
+
+              <div className="mb-10 text-center">
+                <div className="w-20 h-20 bg-linear-to-br from-indigo-600 to-blue-600 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-indigo-200 rotate-3 transition-transform hover:rotate-0 duration-300">
+                  <Cpu className="w-10 h-10 text-white" />
+                </div>
+                <h2 className="text-3xl font-bold text-slate-900 mb-2">Welcome Back</h2>
+                <p className="text-slate-500">Sign in to access your tools.</p>
+              </div>
+
+              <div className="space-y-5">
                 {authError && (
-                  <div className="p-3 rounded-lg bg-red-50 border border-red-100 flex items-center gap-2 text-red-600 text-xs">
-                    <AlertCircle className="w-4 h-4" />
-                    {authError}
-                  </div>
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="p-4 rounded-xl bg-red-50 border border-red-100 flex items-start gap-3 text-red-600 text-sm">
+                    <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                    <p className="leading-relaxed">{authError}</p>
+                  </motion.div>
                 )}
 
                 <button
-                  type="submit"
-                  disabled={isVerifying || otp.length < 6}
-                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-100 flex items-center justify-center gap-2 disabled:opacity-50"
+                  onClick={handleGoogleSignIn}
+                  className="group relative w-full flex items-center justify-center gap-3 px-6 py-4 bg-white border border-slate-200 rounded-2xl hover:border-indigo-200 hover:bg-slate-50 hover:shadow-xl hover:shadow-indigo-100/40 transition-all duration-300 overflow-hidden"
                 >
-                  {isVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
-                  Verify & Continue
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsOtpSent(false)}
-                  className="w-full text-xs text-slate-400 hover:text-indigo-600 font-medium transition-colors"
-                >
-                  Use a different email
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={handleAuthSubmit} className="space-y-5">
-                {authMode === 'register' && (
-                  <div>
-                    <label className="label-text">Full Name</label>
-                    <input
-                      type="text"
-                      required
-                      className="input-field"
-                      placeholder="John Doe"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
+                  <div className="absolute inset-0 bg-linear-to-r from-indigo-50/0 via-indigo-50/50 to-indigo-50/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
+                  <svg className="w-6 h-6 z-10 relative" viewBox="0 0 24 24">
+                    <path
+                      fill="currentColor"
+                      d="M21.35 11.1h-9.17v2.73h6.51c-.33 3.81-3.5 5.44-6.5 5.44C8.36 19.27 5 16.25 5 12c0-4.1 3.2-7.27 7.2-7.27 3.09 0 4.9 1.97 4.9 1.97L19 4.72S16.56 2 12.1 2C6.42 2 2.03 6.8 2.03 12c0 5.05 4.13 10 10.22 10 5.35 0 9.25-3.67 9.25-9.09 0-1.15-.15-1.81-.15-1.81Z"
                     />
-                  </div>
-                )}
-                <div>
-                  <label className="label-text">Email Address</label>
-                  <input
-                    type="email"
-                    required
-                    className="input-field"
-                    placeholder="john@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-
-                {authError && (
-                  <div className="p-3 rounded-lg bg-red-50 border border-red-100 flex items-center gap-2 text-red-600 text-xs">
-                    <AlertCircle className="w-4 h-4" />
-                    {authError}
-                  </div>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={isVerifying}
-                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-100 mt-4 flex items-center justify-center gap-2"
-                >
-                  {isVerifying && <Loader2 className="w-4 h-4 animate-spin" />}
-                  {authMode === 'login' ? 'Sign In with OTP' : 'Create Account'}
-                </button>
-              </form>
-            )}
-
-            {!isOtpSent && (
-              <div className="mt-6 text-center">
-                <button className="text-xs text-slate-400 hover:text-indigo-600 font-medium transition-colors">
-                  Need help? Contact support
+                  </svg>
+                  <span className="font-bold text-slate-700 group-hover:text-slate-900 z-10 relative transition-colors">Continue with Google</span>
                 </button>
               </div>
-            )}
-          </div>
 
-          <p className="text-center text-[10px] text-slate-400 mt-8 uppercase tracking-widest font-bold">
-            Secure Enterprise Grade AI
-          </p>
-        </motion.div>
+              <div className="mt-8 text-center border-t border-slate-100 pt-8">
+                <p className="text-xs text-slate-400 font-medium">By continuing, you agree to our Terms of Service & Privacy Policy.</p>
+              </div>
+            </div>
+          </motion.div>
+        </div>
       </div>
     );
   }
@@ -320,7 +306,7 @@ export default function App() {
   return (
     <div className="flex h-screen bg-[#F8F9FA] overflow-hidden">
       {/* Sidebar - Navigation & History */}
-      <aside className="w-80 border-r border-slate-200 bg-white flex flex-col hidden lg:flex">
+      <aside className="w-80 border-r border-slate-200 bg-white flex-col hidden lg:flex">
         <div className="p-6 border-bottom border-slate-100 flex items-center gap-3">
           <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
             <Cpu className="w-5 h-5 text-white" />
@@ -362,8 +348,9 @@ export default function App() {
                   onClick={() => {
                     setRole(item.role);
                     setIndustry(item.industry || '');
-                    setRawPoint(item.raw);
-                    setResult(item.optimized);
+                    setLimit(item.character_limit || 120);
+                    setRawPoint(item.raw_point);
+                    setResult(item.optimized_result);
                   }}
                 >
                   <button
@@ -377,12 +364,12 @@ export default function App() {
                   </button>
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-[10px] text-slate-400">
-                      {new Date(item.timestamp).toLocaleDateString()}
+                      {new Date(item.created_at).toLocaleDateString()}
                     </span>
                   </div>
                   <p className="text-xs font-medium text-slate-700 truncate mb-1">{item.role}</p>
                   <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
-                    {item.optimized}
+                    {item.optimized_result}
                   </p>
                 </motion.div>
               ))
@@ -392,7 +379,7 @@ export default function App() {
 
         <div className="p-4 border-t border-slate-100">
           <button
-            onClick={() => setIsLoggedIn(false)}
+            onClick={handleSignOut}
             className="w-full flex items-center gap-3 p-3 rounded-xl bg-slate-50 text-slate-500 hover:text-red-600 transition-colors cursor-pointer"
           >
             <UserCircle className="w-4 h-4" />
@@ -434,7 +421,7 @@ export default function App() {
                       <input
                         type="text"
                         placeholder="e.g. Senior Product Manager"
-                        className="input-field pl-10"
+                        className="input-field pl-10!"
                         value={role}
                         onChange={(e) => setRole(e.target.value)}
                       />
@@ -447,7 +434,7 @@ export default function App() {
                       <input
                         type="text"
                         placeholder="e.g. Fintech, SaaS"
-                        className="input-field pl-10"
+                        className="input-field pl-10!"
                         value={industry}
                         onChange={(e) => setIndustry(e.target.value)}
                       />
@@ -473,7 +460,7 @@ export default function App() {
                   <label className="label-text">Raw Experience Point</label>
                   <textarea
                     placeholder="e.g. I led a team to build a new app that increased revenue by 20%."
-                    className="input-field min-h-[120px] resize-none py-4 leading-relaxed"
+                    className="input-field min-h-30 resize-none py-4 leading-relaxed"
                     value={rawPoint}
                     onChange={(e) => setRawPoint(e.target.value)}
                   />

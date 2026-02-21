@@ -1,10 +1,12 @@
 export interface ResumeBullet {
-  id: string;
+  id: string; // From Supabase (UUID)
+  user_id: string; // From Supabase
   role: string;
   industry?: string;
-  raw: string;
-  optimized: string;
-  timestamp: number;
+  character_limit: number; // Added character limit
+  raw_point: string;       // Matched column name
+  optimized_result: string;// Matched column name
+  created_at: string;      // Matched timezone timestamp
 }
 
 export interface BenchmarkingData {
